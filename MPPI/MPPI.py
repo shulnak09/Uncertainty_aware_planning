@@ -27,7 +27,10 @@ class MPPI:
             sigma:np.ndarray = np.array([0.3, 0],[0, 0.1]),
             Q:np.ndarray = np.array(np.diag([50.0, 50.0, 1.0, 20.0])),
             R:np.ndarray = np.array(np.diag([50.0, 50.0, 1.0, 20.0])),
-            collision_thres:float = 0.3
+            collision_thres:float = 0.3,
+            obs_position = np.array([5, 7, 1.0], 
+                                    [10, 11, 1.5],
+                                    [])
 
     ):
         """
@@ -44,6 +47,7 @@ class MPPI:
         Q: weighting matrix for stage cost
         R: weighting matrix for terminal cost
         collision_thres: safe distance from obstacles to avoid collision
+        obs_position: numpy array with [x, y, radius] of the obstacle
         """
 
         self.dt = dt
@@ -57,6 +61,7 @@ class MPPI:
         self.Q = Q
         self.R = R
         self.collision_thres = collision_thres
+        self.obs
 
         # state params:
         self.x_dim = 4
@@ -104,9 +109,9 @@ class MPPI:
                 x = dynamics(x, self.clamp_control(v[k, t-1]), self.dt)
 
                 # Compute cost associated with each trajectory:
-                S[k] += stage_cost(x) + self.param_gamma * u[t-1].T @ np.linalg.inv(self.sigma) @ v[k, t-1]
+                S[k] += stage_cost(x) + self.param_gamma * u[t-1].T @ np.linalg.inv(self.sigma) @ v[k, t-1] + self.is_collided(x, self.obs_pos) * 1e5
 
-            S[k] += terminal_cost(x)
+            S[k] += terminal_cost(x) + self.is_collided(x, self.obs_pos) * 1e5
 
 
         # Compute weights:
@@ -119,13 +124,24 @@ class MPPI:
                 w_epsilon[t] += w[k] * noise[k, t]  
 
 
+        # Define Savitzky-Golay Filter:
+        coeffs = self.Savitzky_Golay_coeffs(window_size=11, poly_order=3)
 
+        # Convolve with SGF:
+        SGF = self._apply_SG_filter(coeffs, w_epsilon)
+
+        # update control
+        u += SGF
+
+
+        # calculate Optimal trajectory
+        
 
 
 
     
     
-    def compute_noise(self, sigma, samples, horizon, dim_u):
+    def compute_noise(self, sigma, samples, horizon, dim_u) -> np.ndarray:
         'Compute the Noise associated with control command'
         mu = np.zeros((dim_u))
         noise = np.random.multivariate_normal(mu, sigma, (samples, horizon))
@@ -145,7 +161,9 @@ class MPPI:
         x_obs, y_obs = obs_t
         d_thres =  0.2
 
-        collided =  True if np.linalg.norm(x_t[:2] - obs_t, ord=2) < d_thres else False    
+        for obs in obs_t:
+            collided =  True if np.linalg.norm(x_t[:2] - obs, ord=2) < d_thres else False    
+        
         return collided
 
 
@@ -165,9 +183,29 @@ class MPPI:
 
         return w
     
-    def Savitzky_Golay_filter(self):
-        pass
+    def Savitzky_Golay_coeffs(self, window_size, poly_order) -> np.ndarray: 
+
+        k = (window_size -1)//2
+        t = np.arange(-k, k+1, 1)
+
+        A = np.vander(t, poly_order+1, increasing=True)
+        c = np.linalg.pinv(np.matmul(A.T, A)) @ A.T
+
+        return c[0]
          
+    def _apply_SG_filter(coeffs, x):
+        
+        window_size = len(coeffs)
+        xx = np.zeros_like(x)
+
+        for dim, sig in enumerate(x): 
+            pad_len = (window_size-1)//2
+            padded_signal = np.pad(sig, (pad_len, pad_len), mode = 'edge')
+            filtered_signal = np.convolve(padded_signal, coeffs[::-1], mode ='valid')
+
+            xx[:, dim] = filtered_signal
+        
+        return xx
 
 
         
